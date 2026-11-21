@@ -3,12 +3,17 @@
 
 A map-dominant atlas front page: masthead, two lead panels, a large
 world map with 36 numbered markers, and a region-grouped story ledger.
-Deterministic: fixed content, no randomness, no network. Writes
-entry.png (1024x1024, <= 1 MiB) to $MAKEFUN_OUTPUT_DIR or ./out.
+Drawn with the Python standard library ONLY (os, math, struct, zlib):
+a pixel buffer, hand-drawn 5x7 bitmap glyphs, scanline polygon fills
+and a struct+zlib PNG encoder. No third-party imports, no network, no
+randomness. Writes entry.png (1024x1024, <= 1 MiB) to
+$MAKEFUN_OUTPUT_DIR or ./out.
 All 36 stories were verified against news reported on 20-21 Nov 2026.
 """
+import math
 import os
-from PIL import Image, ImageDraw, ImageFont
+import struct
+import zlib
 
 W, H = 1024, 1024
 CREAM = (246, 239, 221)
@@ -20,38 +25,241 @@ LAND = (232, 217, 168)
 LAND_EDGE = (138, 123, 82)
 GOLD = (180, 138, 40)
 GREY = (90, 90, 100)
+PANEL = (255, 251, 238)
+DETAIL = (60, 60, 70)
+GRID = (190, 205, 210)
+WHITE = (255, 255, 255)
+BODY = (40, 40, 55)
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+# ---------------------------------------------------------------- font
+# Hand-drawn 5x7 bitmap glyphs: each glyph is 7 rows of 5 cells,
+# "#" is ink, "." is empty. Glyph advance is 6 cells (5 + 1 space).
+
+FONT = {
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
+    "C": (".####", "#....", "#....", "#....", "#....", "#....", ".####"),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+    "X": ("#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    "a": (".....", ".....", ".###.", "....#", ".####", "#...#", ".####"),
+    "b": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "####."),
+    "c": (".....", ".....", ".####", "#....", "#....", "#....", ".####"),
+    "d": ("....#", "....#", ".####", "#...#", "#...#", "#...#", ".####"),
+    "e": (".....", ".....", ".###.", "#...#", "#####", "#....", ".###."),
+    "f": ("..##.", ".#...", ".#...", "####.", ".#...", ".#...", ".#..."),
+    "g": (".....", ".####", "#...#", "#...#", ".####", "....#", ".###."),
+    "h": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "i": ("..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###."),
+    "j": ("...#.", ".....", "..##.", "...#.", "...#.", "#..#.", ".##.."),
+    "k": ("#....", "#....", "#..#.", "#.#..", "##...", "#.#..", "#..#."),
+    "l": (".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "m": (".....", ".....", "##.#.", "#.#.#", "#.#.#", "#.#.#", "#.#.#"),
+    "n": (".....", ".....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "o": (".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###."),
+    "p": (".....", ".....", "####.", "#...#", "#...#", "####.", "#...."),
+    "q": (".....", ".....", ".####", "#...#", "#...#", ".####", "....#"),
+    "r": (".....", ".....", "#.##.", "##..#", "#....", "#....", "#...."),
+    "s": (".....", ".....", ".####", "#....", ".###.", "....#", "####."),
+    "t": (".#...", ".#...", "####.", ".#...", ".#...", ".#...", "..##."),
+    "u": (".....", ".....", "#...#", "#...#", "#...#", "#..##", ".##.#"),
+    "v": (".....", ".....", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "w": (".....", ".....", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."),
+    "x": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#"),
+    "y": (".....", ".....", "#...#", "#...#", "#..##", ".##.#", "...#."),
+    "z": (".....", ".....", "#####", "...#.", "..#..", ".#...", "#####"),
+    "0": (".###.", "#..##", "#.#.#", "##..#", "#...#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "..#..", "..#..", "..#..", "..#.."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."),
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
+    "!": ("..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."),
+    "'": ("..#..", "..#..", ".....", ".....", ".....", ".....", "....."),
+    "(": ("...##", "..#..", ".#...", ".#...", ".#...", "..#..", "...##"),
+    ")": ("##...", "..#..", "...#.", "...#.", "...#.", "..#..", "##..."),
+    ",": (".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."),
+    "-": (".....", ".....", ".....", ".###.", ".....", ".....", "....."),
+    ".": (".....", ".....", ".....", ".....", ".....", ".##..", ".##.."),
+    "/": ("....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."),
+    ":": (".....", ".##..", ".##..", ".....", ".##..", ".##..", "....."),
+    ";": (".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#..."),
+    "?": (".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."),
+    "&": (".###.", "#...#", "#.#..", ".#...", "#.#.#", "#..#.", ".##.#"),
+    "%": ("##..#", "##.#.", "...#.", "..#..", ".#...", "#.##.", "#..##"),
+    "+": (".....", "..#..", "..#..", ".###.", "..#..", "..#..", "....."),
+    "=": (".....", ".....", ".###.", ".....", ".###.", ".....", "....."),
+    "\u2013": (".....", ".....", ".....", ".####", ".....", ".....", "....."),
+    "\u2014": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "\u00b7": (".....", ".....", ".##..", ".##..", ".....", ".....", "....."),
+}
 
 
-def font(name, size):
-    try:
-        return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
-    except OSError:
-        return ImageFont.load_default()
+# ------------------------------------------------------- pixel buffer
+PX = bytearray(bytes(CREAM) * (W * H))
 
 
-SERIF_B = lambda s: font("DejaVuSerif-Bold.ttf", s)
-SERIF = lambda s: font("DejaVuSerif.ttf", s)
-SANS_B = lambda s: font("DejaVuSans-Bold.ttf", s)
-SANS = lambda s: font("DejaVuSans.ttf", s)
+def _clip(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
 
 
-def wrap(draw, text, fnt, max_w):
-    words, lines, cur = text.split(), [], ""
-    for w in words:
-        trial = (cur + " " + w).strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
+def fill_rect(x0, y0, x1, y1, colour):
+    """Fill an inclusive rectangle, clipped to the canvas."""
+    x0 = _clip(x0, 0, W - 1)
+    x1 = _clip(x1, 0, W - 1)
+    y0 = _clip(y0, 0, H - 1)
+    y1 = _clip(y1, 0, H - 1)
+    if x1 < x0 or y1 < y0:
+        return
+    row = bytes(colour) * (x1 - x0 + 1)
+    span = (x1 - x0 + 1) * 3
+    for y in range(y0, y1 + 1):
+        i = (y * W + x0) * 3
+        PX[i:i + span] = row
+
+
+def rect_outline(x0, y0, x1, y1, colour, width=1):
+    for k in range(width):
+        fill_rect(x0 + k, y0 + k, x1 - k, y0 + k, colour)
+        fill_rect(x0 + k, y1 - k, x1 - k, y1 - k, colour)
+        fill_rect(x0 + k, y0 + k, x0 + k, y1 - k, colour)
+        fill_rect(x1 - k, y0 + k, x1 - k, y1 - k, colour)
+
+
+def set_px(x, y, colour):
+    if 0 <= x < W and 0 <= y < H:
+        i = (y * W + x) * 3
+        PX[i], PX[i + 1], PX[i + 2] = colour
+
+
+def draw_line(x0, y0, x1, y1, colour):
+    """Bresenham line, 1 px wide."""
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    while True:
+        set_px(x0, y0, colour)
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+
+def fill_circle(cx, cy, r, colour):
+    for dy in range(-r, r + 1):
+        dx = int(math.sqrt(r * r - dy * dy))
+        fill_rect(cx - dx, cy + dy, cx + dx, cy + dy, colour)
+
+
+def fill_polygon(points, colour):
+    """Even-odd scanline fill. Points are (x, y) float pairs."""
+    if len(points) < 3:
+        return
+    ys = [p[1] for p in points]
+    y_lo, y_hi = int(min(ys)), int(max(ys))
+    n = len(points)
+    for y in range(max(y_lo, 0), min(y_hi, H - 1) + 1):
+        xs = []
+        for i in range(n):
+            x0, y0 = points[i]
+            x1, y1 = points[(i + 1) % n]
+            if y0 == y1:
+                continue
+            lo, hi = (y0, y1) if y0 < y1 else (y1, y0)
+            if lo <= y < hi:
+                xs.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+        xs.sort()
+        for k in range(0, len(xs) - 1, 2):
+            fill_rect(int(math.ceil(xs[k])), y,
+                      int(math.floor(xs[k + 1])), y, colour)
+
+
+def poly_outline(points, colour):
+    n = len(points)
+    for i in range(n):
+        x0, y0 = points[i]
+        x1, y1 = points[(i + 1) % n]
+        draw_line(int(round(x0)), int(round(y0)),
+                  int(round(x1)), int(round(y1)), colour)
+
+
+# ------------------------------------------------------------- text
+def text_width(s, scale, adv=None):
+    a = adv if adv is not None else 6 * scale
+    if not s:
+        return 0
+    return len(s) * a - (a - 5 * scale)
+
+
+def draw_glyph(x, y, glyph, scale, colour, bold=False):
+    for row, bits in enumerate(glyph):
+        for col, bit in enumerate(bits):
+            if bit != "#":
+                continue
+            x0 = x + col * scale
+            y0 = y + row * scale
+            fill_rect(x0, y0, x0 + scale - 1, y0 + scale - 1, colour)
+            if bold:
+                fill_rect(x0 + 1, y0, x0 + scale, y0 + scale - 1, colour)
+
+
+def draw_text(x, y, s, scale, colour, bold=False, adv=None):
+    a = adv if adv is not None else 6 * scale
+    cx = x
+    for ch in s:
+        glyph = FONT.get(ch, FONT["?"])
+        draw_glyph(cx, y, glyph, scale, colour, bold)
+        cx += a
+
+
+def wrap_text(text, scale, max_w, adv=None):
+    lines = []
+    cur = ""
+    for word in text.split(" "):
+        trial = word if not cur else cur + " " + word
+        if text_width(trial, scale, adv) <= max_w or not cur:
             cur = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
+            lines.append(cur)
+            cur = word
     if cur:
         lines.append(cur)
     return lines
 
 
+# ------------------------------------------------------------ content
 # (num, region, headline, detail, lon, lat) -- display lon/lat nudged
 # slightly where markers would collide on the east coast of the USA.
 STORIES = [
@@ -208,8 +416,10 @@ CONTINENTS = [
     [(-22, 64), (-18, 63), (-14, 64), (-15, 66), (-20, 66), (-24, 65)],
 ]
 
+
+# ------------------------------------------------------------ layout
 MAP_X0, MAP_X1 = 24, 1000
-MAP_Y0, MAP_Y1 = 236, 500
+MAP_Y0, MAP_Y1 = 266, 514
 
 
 def project(lon, lat):
@@ -218,123 +428,158 @@ def project(lon, lat):
     return x, y
 
 
-def draw_map(draw):
-    draw.rectangle([MAP_X0, MAP_Y0, MAP_X1, MAP_Y1], fill=OCEAN,
-                   outline=INK, width=2)
+def draw_map():
+    fill_rect(MAP_X0, MAP_Y0, MAP_X1, MAP_Y1, OCEAN)
+    rect_outline(MAP_X0, MAP_Y0, MAP_X1, MAP_Y1, INK, 2)
     for poly in CONTINENTS:
         pts = [project(lon, lat) for lon, lat in poly]
-        draw.polygon(pts, fill=LAND, outline=LAND_EDGE)
+        fill_polygon(pts, LAND)
+        poly_outline(pts, LAND_EDGE)
     # graticule
     for lon in range(-150, 181, 30):
-        x = MAP_X0 + (lon + 180.0) / 360.0 * (MAP_X1 - MAP_X0)
-        draw.line([(x, MAP_Y0), (x, MAP_Y1)], fill=(190, 205, 210), width=1)
+        x = int(MAP_X0 + (lon + 180.0) / 360.0 * (MAP_X1 - MAP_X0))
+        draw_line(x, MAP_Y0, x, MAP_Y1, GRID)
     for lat in (60, 30, 0, -30):
         _, y = project(0, lat)
-        draw.line([(MAP_X0, y), (MAP_X1, y)], fill=(190, 205, 210), width=1)
+        draw_line(MAP_X0, int(y), MAP_X1, int(y), GRID)
     # equator label
-    draw.text((MAP_X0 + 6, project(0, 0)[1] + 3), "EQUATOR",
-              font=SANS(8), fill=GREY)
-    # markers
+    draw_text(MAP_X0 + 6, int(project(0, 0)[1]) + 3, "EQUATOR", 1, GREY)
+    # numbered markers
     for num, _reg, _t, _d, lon, lat in STORIES:
         x, y = project(lon, lat)
-        r = 10
-        draw.ellipse([x - r, y - r, x + r, y + r], fill=RED,
-                     outline=(255, 255, 255), width=2)
+        cx, cy = int(round(x)), int(round(y))
+        fill_circle(cx, cy, 11, WHITE)
+        fill_circle(cx, cy, 9, RED)
         label = str(num)
-        fnt = SANS_B(9 if num < 10 else 8)
-        tw = draw.textlength(label, font=fnt)
-        draw.text((x - tw / 2, y - 6.5), label, font=fnt,
-                  fill=(255, 255, 255))
+        draw_text(cx - text_width(label, 1) // 2, cy - 3,
+                  label, 1, WHITE, bold=True)
 
 
-def draw_lead(draw, x0, x1, y0, y1, kicker, title, body):
-    draw.rectangle([x0, y0, x1, y1], fill=(255, 251, 238),
-                   outline=INK, width=2)
-    draw.rectangle([x0, y0, x1, y0 + 24], fill=RED)
-    draw.text((x0 + 10, y0 + 5), kicker, font=SANS_B(12),
-              fill=(255, 255, 255))
-    draw.text((x0 + 10, y0 + 30), title, font=SERIF_B(17), fill=INK)
-    for i, line in enumerate(wrap(draw, body, SANS(12), x1 - x0 - 20)):
-        draw.text((x0 + 10, y0 + 56 + i * 16), line, font=SANS(12),
-                  fill=(40, 40, 55))
+def draw_lead(x0, x1, kicker, title, body):
+    y0, y1 = 118, 236
+    fill_rect(x0, y0, x1, y1, PANEL)
+    fill_rect(x0, y0, x1, y0 + 23, RED)
+    rect_outline(x0, y0, x1, y1, INK, 2)
+    draw_text(x0 + 10, y0 + 5, kicker, 2, WHITE, bold=True)
+    draw_text(x0 + 10, y0 + 30, title, 3, INK, bold=True, adv=17)
+    for i, line in enumerate(wrap_text(body, 2, x1 - x0 - 20)):
+        draw_text(x0 + 10, y0 + 56 + i * 15, line, 2, BODY)
 
 
-def main():
-    img = Image.new("RGB", (W, H), CREAM)
-    draw = ImageDraw.Draw(img)
-    # outer frame
-    draw.rectangle([8, 8, W - 9, H - 9], outline=INK, width=3)
-    draw.rectangle([14, 14, W - 15, H - 15], outline=GOLD, width=1)
-
-    # ---- masthead ----
-    title = "THE WORLD IN ONE DAY"
-    tf = SERIF_B(46)
-    tw = draw.textlength(title, font=tf)
-    draw.text(((W - tw) / 2, 26), title, font=tf, fill=INK)
-    draw.line([(60, 88), (W - 60, 88)], fill=INK, width=2)
-    sub = "SATURDAY, 21 NOVEMBER 2026  \u00b7  36 STORIES  \u00b7  5 REGIONS  \u00b7  ONE DAY OF WORLD NEWS"
-    sf = SANS_B(13)
-    sw = draw.textlength(sub, font=sf)
-    draw.text(((W - sw) / 2, 96), sub, font=sf, fill=RED)
-
-    # ---- lead panels ----
-    draw_lead(draw, 20, 502, 122, 212, "LEAD 1  \u00b7  PERU",
-              "Quake shakes the Andes",
-              "A magnitude 6.8 earthquake strikes Junin in central Peru; "
-              "tremors are felt 320 km away in the capital, Lima.")
-    draw_lead(draw, 522, 1004, 122, 212, "LEAD 2  \u00b7  THE HAGUE",
-              "Myanmar guilty of genocide",
-              "The International Court of Justice rules Myanmar committed "
-              "genocide against the Rohingya, a landmark judgment.")
-
-    # ---- map ----
-    draw.text((20, 220), "THE WORLD AT A GLANCE \u2014 36 STORIES, NUMBERED ON THE MAP",
-              font=SANS_B(13), fill=INK)
-    draw_map(draw)
-
-    # ---- story ledger ----
-    draw.text((20, 512), "THE DAY IN BRIEF \u2014 BY REGION",
-              font=SANS_B(13), fill=INK)
-    draw.line([(20, 532), (1004, 532)], fill=INK, width=2)
+def draw_ledger():
     col_w, gap = 192, 6
     x = 20
     for region in REGIONS:
         items = [s for s in STORIES if s[1] == region]
         colour = REGION_COLOURS[region]
-        draw.rectangle([x, 540, x + col_w, 562], fill=colour)
-        rf = SANS_B(11)
-        label = region.upper()
-        while draw.textlength(label, font=rf) > col_w - 8 and len(label) > 4:
-            label = label[:-1]
-        draw.text((x + 4, 546), label, font=rf, fill=(255, 255, 255))
-        y = 570
+        fill_rect(x, 552, x + col_w - 1, 573, colour)
+        draw_text(x + 6, 559, region.upper(), 1, WHITE, bold=True)
+        y = 582
         for num, _r, headline, detail, _lon, _lat in items:
-            draw.text((x, y), str(num), font=SANS_B(11), fill=RED)
-            lines = wrap(draw, headline, SANS_B(10), col_w - 24)
-            for i, ln in enumerate(lines):
-                draw.text((x + 22, y + i * 13), ln, font=SANS_B(10),
-                          fill=INK)
-            y += len(lines) * 13 + 2
-            dlines = wrap(draw, detail, SANS(9), col_w - 22)
-            for i, ln in enumerate(dlines):
-                draw.text((x + 22, y + i * 12), ln, font=SANS(9),
-                          fill=(60, 60, 70))
-            y += len(dlines) * 12 + 6
+            draw_text(x, y, str(num), 2, RED, bold=True)
+            hl = wrap_text(headline, 1, col_w - 26)
+            for i, ln in enumerate(hl):
+                draw_text(x + 26, y + i * 10, ln, 1, INK, bold=True)
+            head_h = len(hl) * 10
+            dl = wrap_text(detail, 1, col_w - 26)
+            for i, ln in enumerate(dl):
+                draw_text(x + 26, y + head_h + i * 9, ln, 1, DETAIL)
+            y += head_h + len(dl) * 9 + 6
         x += col_w + gap
 
+
+# --------------------------------------------------------- PNG output
+def _chunk(kind, data):
+    out = struct.pack(">I", len(data)) + kind + data
+    out += struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return out
+
+
+def write_png(path):
+    """Encode the pixel buffer as PNG, picking the best of filters
+    0 (None), 1 (Sub) and 2 (Up) per scanline by absolute-error score."""
+    raw = bytearray()
+    prev = bytes(W * 3)
+    for y in range(H):
+        row = bytes(PX[y * W * 3:(y + 1) * W * 3])
+        best_score = None
+        best = (0, row)
+        for f in (0, 1, 2):
+            if f == 0:
+                filt = row
+            elif f == 1:
+                buf = bytearray(len(row))
+                for i in range(len(row)):
+                    left = row[i - 3] if i >= 3 else 0
+                    buf[i] = (row[i] - left) & 0xFF
+                filt = bytes(buf)
+            else:
+                buf = bytearray(len(row))
+                for i in range(len(row)):
+                    buf[i] = (row[i] - prev[i]) & 0xFF
+                filt = bytes(buf)
+            score = 0
+            for b in filt:
+                score += b if b < 128 else 256 - b
+            if best_score is None or score < best_score:
+                best_score = score
+                best = (f, filt)
+        raw.append(best[0])
+        raw.extend(best[1])
+        prev = row
+    data = b"\x89PNG\r\n\x1a\n"
+    data += _chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+    data += _chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+    data += _chunk(b"IEND", b"")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return len(data)
+
+
+def main():
+    # outer frame
+    rect_outline(8, 8, W - 9, H - 9, INK, 3)
+    rect_outline(14, 14, W - 15, H - 15, GOLD, 1)
+
+    # ---- masthead ----
+    title = "THE WORLD IN ONE DAY"
+    draw_text((W - text_width(title, 6)) // 2, 26, title, 6, INK)
+    fill_rect(60, 88, W - 61, 89, INK)
+    sub = ("SATURDAY, 21 NOVEMBER 2026  \u00b7  36 STORIES  \u00b7  "
+           "5 REGIONS  \u00b7  ONE DAY OF WORLD NEWS")
+    draw_text((W - text_width(sub, 2)) // 2, 96, sub, 2, RED, bold=True)
+
+    # ---- lead panels ----
+    draw_lead(20, 502, "LEAD 1  \u00b7  PERU",
+              "Quake shakes the Andes",
+              "A magnitude 6.8 earthquake strikes Junin in central Peru; "
+              "tremors are felt 320 km away in the capital, Lima.")
+    draw_lead(522, 1004, "LEAD 2  \u00b7  THE HAGUE",
+              "Myanmar guilty of genocide",
+              "The International Court of Justice rules Myanmar committed "
+              "genocide against the Rohingya, a landmark judgment.")
+
+    # ---- map ----
+    draw_text(20, 244, "THE WORLD AT A GLANCE \u2014 36 STORIES, NUMBERED ON THE MAP",
+              2, INK, bold=True)
+    draw_map()
+
+    # ---- story ledger ----
+    draw_text(20, 524, "THE DAY IN BRIEF \u2014 BY REGION", 2, INK, bold=True)
+    fill_rect(20, 545, 1003, 546, INK)
+    draw_ledger()
+
     # ---- footer ----
-    draw.line([(20, 992), (1004, 992)], fill=INK, width=1)
+    fill_rect(20, 992, 1003, 992, INK)
     foot = ("All 36 stories reported 20\u201321 November 2026  \u00b7  "
             "Drawn from the day's news wires  \u00b7  THE WORLD IN ONE DAY")
-    ff = SANS(10)
-    fw = draw.textlength(foot, font=ff)
-    draw.text(((W - fw) / 2, 1000), foot, font=ff, fill=GREY)
+    draw_text((W - text_width(foot, 1)) // 2, 1000, foot, 1, GREY)
 
     outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "out")
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, "entry.png")
-    img.save(path, "PNG", optimize=True)
-    print("wrote", path, os.path.getsize(path), "bytes")
+    size = write_png(path)
+    print("wrote", path, size, "bytes")
 
 
 if __name__ == "__main__":
